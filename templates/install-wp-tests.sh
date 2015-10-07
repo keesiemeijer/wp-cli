@@ -39,20 +39,64 @@ wp_core_version(){
 	echo $version
 }
 
+wp_api_version(){
+	local latest=''
+	local api_url="http://api.wordpress.org/core/version-check/1.5/"
+
+	if [ `which curl` ]; then
+		latest=$(curl -s "$api_url" | head -n 4 | tail -n 1)
+	elif [ `which wget` ]; then
+		latest=$(wget -S -q -O - "$api_url" | head -n 4 | tail -n 1);
+	fi
+
+	echo $latest
+}
+
+wp_download_exists(){
+	if [ `which curl` ]; then
+		$(curl --output /dev/null --silent --head --fail "$1");
+	elif [ `which wget` ]; then
+		$(wget --spider $1 >/dev/null 2>&1);
+	fi
+}
+
 install_wp() {
+
+	if [ $WP_VERSION == 'latest' ]; then
+
+		local archive_name='latest'
+		local latest=$(wp_api_version)
+		local url=https://wordpress.org/"wordpress-$latest".tar.gz
+
+		# check if latest version exists
+		if wp_download_exists $url; then
+			WP_VERSION=$latest
+			archive_name="wordpress-$latest"
+		fi
+	else
+		local archive_name="wordpress-$WP_VERSION"
+	fi
+
+	local core_version=$(wp_core_version)
+
+	if [ $core_version != 'trunk' ]; then
+		if [ $core_version == $WP_VERSION ]; then
+			return
+		fi
+	fi
 
 	mkdir -p $WP_CORE_DIR
 
-	if [ $WP_VERSION == 'latest' ]; then
-		local ARCHIVE_NAME='latest'
+	if wp_download_exists "https://wordpress.org/${archive_name}.tar.gz"; then
+
+		download https://wordpress.org/${archive_name}.tar.gz  /tmp/wordpress.tar.gz
+		tar --strip-components=1 -zxmf /tmp/wordpress.tar.gz -C "$WP_CORE_DIR"
+
+		download https://raw.github.com/markoheijnen/wp-mysqli/master/db.php "$WP_CORE_DIR/wp-content/db.php"
 	else
-		local ARCHIVE_NAME="wordpress-$WP_VERSION"
+		echo "Error: WordPress version not found."
+		exit
 	fi
-
-	download https://wordpress.org/${ARCHIVE_NAME}.tar.gz  /tmp/wordpress.tar.gz
-	tar --strip-components=1 -zxmf /tmp/wordpress.tar.gz -C $WP_CORE_DIR
-
-	download https://raw.github.com/markoheijnen/wp-mysqli/master/db.php $WP_CORE_DIR/wp-content/db.php
 }
 
 install_test_suite() {
@@ -73,11 +117,11 @@ install_test_suite() {
 	# Set up the testing suite from the core version
 	mkdir -p $WP_TESTS_DIR
 
-	svn export --quiet --force https://develop.svn.wordpress.org/$core_version/tests/phpunit/includes/ $WP_TESTS_DIR/includes
+	if wp_download_exists "https://develop.svn.wordpress.org/$core_version/wp-tests-config-sample.php"; then
 
-	cd $WP_TESTS_DIR
+		svn export --quiet --force https://develop.svn.wordpress.org/$core_version/tests/phpunit/includes/ $WP_TESTS_DIR/includes
+		cd $WP_TESTS_DIR
 
-	if [ ! -f wp-tests-config.php ]; then
 		download https://develop.svn.wordpress.org/$core_version/wp-tests-config-sample.php "$WP_TESTS_DIR"/wp-tests-config.php
 		sed $ioption "s:dirname( __FILE__ ) . '/src/':'$WP_CORE_DIR/':" "$WP_TESTS_DIR"/wp-tests-config.php
 		sed $ioption "s/youremptytestdbnamehere/$DB_NAME/" "$WP_TESTS_DIR"/wp-tests-config.php
@@ -85,7 +129,6 @@ install_test_suite() {
 		sed $ioption "s/yourpasswordhere/$DB_PASS/" "$WP_TESTS_DIR"/wp-tests-config.php
 		sed $ioption "s|localhost|${DB_HOST}|" "$WP_TESTS_DIR"/wp-tests-config.php
 	fi
-
 }
 
 install_db() {
